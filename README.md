@@ -9,4 +9,4 @@ sejam do Brazil.
 Exemplo
 porta 3389
 
-Todos os ips que não forem do Brazil, ser
+Todos os ips que não forem do Brazil, serão bloqueados
