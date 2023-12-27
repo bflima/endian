@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+
+## NOME...............: serpro.sh
+## VERSÃO.............: 1.0.10
+## DATA DA CRIAÇÃO....: 26/12/2023
+## ESCRITO POR........: Bruno Lima
+## E-MAIL.............: bruno@lc.tec.br
+## DISTRO.............: Endian Fw 3.3.22
+## LICENÇA............: GPLv3
+## PROJETO............: https://github.com/bflima
+## DESCRIÇÃO..........: Baixar criar e atualizar regras para bloqueio de ips usando o ipset, usando lista de ips fornecidos pelo serpro 
+
+# Váriaveis
+LISTA='bl_serpro'
+
+# FUNÇÕES
+MENU()
+{
+    clear
+    echo "
+---------------------MENU---------------------
+
+[1] - CRIAR REGRAS PARA BLOQUEIO
+
+[2] - ATUALIZAR LISTA COM IPS SERPRO
+
+[3] - LIMPAR REGRAS IPSET
+
+[4] - LIMPAR REGRAS IPTABLES
+
+[5] - SALVAR REGRAS APLICADAS
+
+[6] - EXIBIR REGRAS CRIADAS
+
+[9] - SAIR DO PROGRAMA
+
+----------------------------------------------
+"
+}
+
+############################################################################################################
+CRIAR_REGRAS()
+{
+
+    clear
+    LISTA='bl_serpro'
+    # Entrar no diretoório tmp
+    temp_dir=$(mktemp -d)
+    cd "$temp_dir" || { echo 'Erro ao acessar diretório temporário'; exit 2; }
+
+    # Limpar arquivos
+    rm -rf ./*.txt*
+
+    # Baixar Arquivos
+    wget --no-check-certificate https://s3.i02.estaleiro.serpro.gov.br/blocklist/blocklist.txt
+
+    # Criar lista com IPSET
+    ipset -L $LISTA -q > /dev/null || ipset -N $LISTA -exist hash:ip
+
+    # Limpar lista
+    ipset -F $LISTA
+
+    # Atualizar lista de IPS
+    while read -r IP_SERPRO ; do ipset add $LISTA "${IP_SERPRO}" ; done < blocklist.txt
+
+    # Aplicar as regras
+    read -n 1 -rp 'Deseja aplicar as regras de bloqueio usando o IPTABLES s/N: ' ESCOLHA
+
+    # Validar para aplicar as regras do iptables
+    ESCOLHA=${ESCOLHA:-n}
+    [[ ${ESCOLHA,,} != 's' ]] && { echo 'Saindo...' ; exit 2 ; }
+    
+    # Verificar a chain INPUT , para uso no endian firewall
+    CHAIN_IPT="CUSTOMINPUT" 
+    iptables -S | grep "CUSTOMINPUT"   || iptables -t filter -N CUSTOMINPUT
+
+    # Verificar a chain FWD, para uso no endian firewall
+    CHAIN_FWD="CUSTOMFORWARD" 
+    iptables -S | grep "CUSTOMFORWARD" || iptables -t filter -N CUSTOMFORWARD
+
+    # Variáveis
+    LOG_IPT='BL_SERPRO_IPT:DROP:'
+    LOG_FWD='BL_SERPRO_FWD:DROP:'
+
+    # Gravar Logs no arquivo, antes verifica se a regra existe CHAIN CUSTOMINPUT
+    iptables -C CUSTOMINPUT -m set --match-set $LISTA src -j NFLOG --nflog-prefix "$LOG_IPT" || \
+    iptables -I CUSTOMINPUT -m set --match-set $LISTA src -j NFLOG --nflog-prefix "$LOG_IPT"
+
+    # Gravar Logs no arquivo, antes verifica se a regra existe CHAIN CUSTOMFORWARD
+    iptables -C CUSTOMFORWARD -m set --match-set $LISTA src -j NFLOG --nflog-prefix "$LOG_FWD" || \
+    iptables -I CUSTOMFORWARD -m set --match-set $LISTA src -j NFLOG --nflog-prefix "$LOG_FWD"
+
+    # Criar regras de bloqueio antes verifica se a regra existe
+    iptables -t filter -A INPUT -j CUSTOMINPUT
+    iptables -C CUSTOMINPUT   -m set --match-set $LISTA src -j DROP || iptables -A CUSTOMINPUT   -m set --match-set $LISTA src -j DROP
+
+    iptables -t filter -A INPUT -j CUSTOMFORWARD
+    iptables -C CUSTOMFORWARD -m set --match-set $LISTA src -j DROP || iptables -A CUSTOMFORWARD -m set --match-set $LISTA src -j DROP
+}
+
+############################################################################################################
+ATUALIZAR_LISTA_IPS()
+{
+    clear
+    # Testar se lista existe
+    ipset -L $LISTA -q > /dev/null || { whiptail --title "Erro" --msgbox "Lista $LISTA nao criada, favor criar regras antes" --fb 10 60 3>&1 1>&2 2>&3 ; exit 2 ; }
+
+    # Entrar no diretoório tmp
+    temp_dir=$(mktemp -d)
+    cd "$temp_dir" || { echo 'Erro ao acessar diretório temporário'; exit 2; }
+
+    # Limpar arquivos
+    rm -rf ./*.txt*
+
+    # Baixar Arquivos
+    wget --no-check-certificate https://s3.i02.estaleiro.serpro.gov.br/blocklist/blocklist.txt
+
+    # Limpar lista
+    ipset -F $LISTA
+
+    # Atualizar lista de IPS
+    while read -r IP_SERPRO ; do ipset add $LISTA "${IP_SERPRO}" ; done < blocklist.txt
+
+}
+
+############################################################################################################
+LIMPAR_REGRAS_IPSET()
+{
+    clear
+    printf '\n\nCUIDADO ao limpar as regras do ipset, o acesso via ssh pode ser perdido\n'
+    read -n 1 -rp 'Deseja continuar s/N: ' ESCOLHA
+
+    ESCOLHA=${ESCOLHA:-n}
+
+    [[ ${ESCOLHA,,} = 's' ]] && ipset -F "$LISTA"
+}
+
+############################################################################################################
+LIMPAR_REGRAS_IPT()
+{
+    clear
+    # Verificar a chain INPUT , para uso no endian firewall
+    CHAIN_IPT="CUSTOMINPUT" 
+    
+    # Verificar a chain FWD, para uso no endian firewall
+    CHAIN_FWD="CUSTOMFORWARD" 
+    
+    echo 'Regras em USO:'
+    iptables -nvL $CHAIN_IPT
+    iptables -nvL $CHAIN_FWD
+
+    read -n 1 -rp 'Deseja continuar s/N: ' ESCOLHA
+
+    ESCOLHA=${ESCOLHA:-n}
+    [[ ${ESCOLHA,,} != 's' ]] && { echo 'Saindo...' ; exit 2 ; }
+
+    # Realizando backup das regras atuais
+    iptables-save > "$IPT_BKP-$(date +%d-%m-%Y).txt"
+
+    # Limpar as regras
+    iptables -F $CHAIN_IPT
+    iptables -t filter -D INPUT  -j $CHAIN_IPT
+
+    iptables -F $CHAIN_FWD
+    iptables -t filter -D INPUT  -j $CHAIN_FWD
+}
+
+############################################################################################################
+SALVAR_REGRAS()
+{
+    clear
+    IPT_BKP='/root/iptables_bkp_rules'
+    IST_BKP='/root/ipset_bkp_rules'
+    iptables-save > "$IPT_BKP"
+    ipset save    > "$IST_BKP"
+}
+
+############################################################################################################
+EXIBIR_REGRAS()
+{
+    clear
+    echo 'regras ipables'
+    iptables -nvL
+    read -n 1 -rp 'Regras IPTABLES: ' ESCOLHA
+    echo 'regras ipset'
+    ipset -L
+}
+
+############################################################################################################
+MENU
+
+
+
+# Ler somente o primeiro caracter digitado
+read -n 1 -t 30 -rp 'FAVOR ESCOLHER -> ' MENU || printf 'Tempo limite esgotado\nFavor executar novamente o script\n'
+case $MENU in
+
+    1) CRIAR_REGRAS
+    ;;
+
+    2) ATUALIZAR_LISTA_IPS
+    ;;
+
+    3) LIMPAR_REGRAS_IPSET
+    ;;
+
+    4) LIMPAR_REGRAS_IPT
+    ;;
+
+    5) SALVAR_REGRAS
+    ;;
+
+    6) EXIBIR_REGRAS
+    ;;
+esac
