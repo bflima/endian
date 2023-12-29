@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+## NOME...............: serpro.sh
+## VERSÃO.............: 1.0.10
+## DATA DA CRIAÇÃO....: 29/12/2023
+## ESCRITO POR........: Bruno Lima
+## E-MAIL.............: bruno@lc.tec.br
+## DISTRO.............: Endian Fw 3.3.22
+## LICENÇA............: GPLv3
+## PROJETO............: https://github.com/bflima
+## DESCRIÇÃO..........: Baixar criar e atualizar regras para bloqueio de ips usando o ipset, usando lista de ips fornecidos pelo serpro 
+## Para adiconar no cron do endian:
+## Remover o '.sh' do nome do script (os scripts que exsitem nesses diretórios não possue a extensão)
+## Atribuir o chmod 755 no script
+
+
+# Criar diretório temporário para baixar a lista
+temp_dir=$(mktemp -d)
+cd "$temp_dir" || { echo 'Erro ao acessar diretório temporário'; exit 2; }
+
+# Deletar caso exista algum arquivo de lista baixada
+rm -rf ./*.txt*
+
+# Baixar o arquivo
+wget --no-check-certificate https://s3.i02.estaleiro.serpro.gov.br/blocklist/blocklist.txt
+
+# Nome da lista a ser criada
+LISTA='bl_serpro'
+
+# Verifica se lista existe, senão a lista será criada
+ipset -L $LISTA -q || ipset -N $LISTA hash:ip
+
+# Limpar a lista
+ipset -F $LISTA
+
+# Alimenta a lista com os ips baixados
+while read -r IP_SERPRO ; do ipset add $LISTA "${IP_SERPRO}" ; done < blocklist.txt
+
+# Gravar Logs no arquivo, antes verifica se a regra existe CHAIN CUSTOMINPUT
+iptables -C CUSTOMINPUT   -m set --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_IPT: " || \
+iptables -I CUSTOMINPUT   -m set --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_IPT: "
+
+# Gravar Logs no arquivo, antes verifica se a regra existe CHAIN CUSTOMFORWARD
+iptables -C CUSTOMFORWARD -m set --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_FWD: " || \
+iptables -I CUSTOMFORWARD -m set --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_FWD: "
+
+# Criar regras de bloqueio INPUT, senão existir
+iptables -C CUSTOMINPUT   -m set --match-set $LISTA src -j DROP || \
+iptables -A CUSTOMINPUT   -m set --match-set $LISTA src -j DROP
+
+# Criar regras de bloqueio de FORWARD, senão existir
+iptables -C CUSTOMFORWARD -m set --match-set $LISTA src -j DROP || \
+iptables -A CUSTOMFORWARD -m set --match-set $LISTA src -j DROP
+
+# Descomentar as linha abaixo caso queira ver a saídas dos comandos
+
+# clear
+# echo "Regras criadas CUSTOMINPUT"
+# iptables -nvL CUSTOMINPUT
+
+# echo "Regras criadas CUSTOMFORWARD"
+# iptables -nvL CUSTOMFORWARD
+
+# echo "Total de regras criadas IPSET"
+# ipset -L | wc -l
