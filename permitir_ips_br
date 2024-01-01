@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+
+## NOME...............: serpro.sh
+## VERSÃO.............: 1.0.10
+## DATA DA CRIAÇÃO....: 29/12/2023
+## ESCRITO POR........: Bruno Lima
+## E-MAIL.............: bruno@lc.tec.br
+## DISTRO.............: Endian Fw 3.3.22
+## LICENÇA............: GPLv3
+## PROJETO............: https://github.com/bflima
+## DESCRIÇÃO..........: Baixar criar e atualizar regras para bloqueio de ips usando o ipset, usando lista de ips fornecidos pelo serpro 
+
+# Função
+ERRO() { echo "$1" ; exit 1 ; }
+
+clear
+# Criar diretório
+[[ -d /srv/geoip ]] || mkdir -p /srv/geoip || ERRO "Erro ao criar diretorio"
+
+# Acessar e baixar lista
+cd /srv/geoip || Erro "Erro ao acessar diretorio"
+
+# Extrair arquivos
+rm -rf br.zone
+wget --no-check-certificate https://www.ipdeny.com/ipblocks/data/countries/br.zone || ERRO "Erro ao baixar arquivo"
+
+# Nome da lista a ser criada
+LISTA='brazil'
+
+# Verifica se lista existe, senão a lista será criada
+# ipset -L $LISTA -q || ipset -N $LISTA -exist hash:net hashsize 32768 maxelem 200000
+ipset -L $LISTA -q || ipset -N $LISTA -exist hash:net maxelem 20000
+
+# Limpar regras
+ipset flush $LISTA
+
+# Carregar ips do Brazil
+while read -r IP_GEO ; do ipset add $LISTA "${IP_GEO}" ; done < br.zone
+
+# Portas de bloqueio
+PORTS="8080,3389"
+
+# Gravar Logs no arquivo, antes verifica se a regra existe CHAIN CUSTOMINPUT
+iptables -C CUSTOMINPUT   -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_INPUT: " || \
+iptables -I CUSTOMINPUT   -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_INPUT: "
+
+# Gravar Logs no arquivo, antes verifica se a regra existe CHAIN CUSTOMFORWARD
+iptables -C CUSTOMFORWARD -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_FORWARD: " || \
+iptables -I CUSTOMFORWARD -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_FORWARD: "
+
+# Criar regras de bloqueio INPUT, senão existir
+iptables -C CUSTOMINPUT   -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j DROP || \
+iptables -A CUSTOMINPUT   -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j DROP
+
+# Criar regras de bloqueio de FORWARD, senão existir
+iptables -C CUSTOMFORWARD -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j DROP || \
+iptables -A CUSTOMFORWARD -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j DROP
+
+# Criar lista
+WHITELIST='whitelist'
+
+#Portas Whitelist
+PORTS_WHITELIST="8080,3389"
+
+# IPS liberados ATENCAO SEPARAR OS IPS POR ',' VIRGULA
+IP_WHITELIST="200.200.200.200"
+
+# Verifica se lista existe, senão a lista será criada
+if [[ $(ipset -L "$WHITELIST" -q) ]]; then ipset -F $WHITELIST ; else ipset -N $WHITELIST -exist hash:ip maxelem 20000 ; fi
+
+# Carregar ips da Whitelist
+while IFS=, read -ra items; do
+    for ips in "${items[@]}"; do
+        ipset add $WHITELIST "${ips}"
+    done
+done <<< "$IP_WHITELIST"
+
+# Gravar Logs no arquivo, antes verifica se a regra existe CHAIN CUSTOMFORWARD
+iptables -C CUSTOMFORWARD -p tcp -m multiport --dports $PORTS_WHITELIST -m set --match-set $WHITELIST src -j NFLOG --nflog-prefix "${LISTA^^}:LIBERADO: " || \
+iptables -I CUSTOMFORWARD -p tcp -m multiport --dports $PORTS_WHITELIST -m set --match-set $WHITELIST src -j NFLOG --nflog-prefix "${LISTA^^}:LIBERADO: "
+
+# Criar regras de bloqueio de FORWARD, senão existir
+iptables -C CUSTOMFORWARD   -p tcp -m multiport --dports $PORTS_WHITELIST -m set --match-set $WHITELIST src -j ACCEPT || \
+iptables -I CUSTOMFORWARD 3 -p tcp -m multiport --dports $PORTS_WHITELIST -m set --match-set $WHITELIST src -j ACCEPT
