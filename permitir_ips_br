@@ -82,3 +82,8 @@ iptables -I CUSTOMFORWARD -p tcp -m multiport --dports $PORTS_WHITELIST -m set -
 # Criar regras de bloqueio de FORWARD, senão existir
 iptables -C CUSTOMFORWARD   -p tcp -m multiport --dports $PORTS_WHITELIST -m set --match-set $WHITELIST src -j ACCEPT || \
 iptables -I CUSTOMFORWARD 3 -p tcp -m multiport --dports $PORTS_WHITELIST -m set --match-set $WHITELIST src -j ACCEPT
+
+# Criar regras de destino
+iptables -C CUSTOMFORWARD   -p tcp -m multiport --dports $PORTS_WHITELIST -m set --match-set $WHITELIST dst -j ACCEPT || \
+iptables -I CUSTOMFORWARD 3 -p tcp -m multiport --dports $PORTS_WHITELIST -m set --match-set $WHITELIST dst -j ACCEPT
+
