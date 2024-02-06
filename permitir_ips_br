@@ -38,7 +38,7 @@ ipset flush $LISTA
 while read -r IP_GEO ; do ipset add $LISTA "${IP_GEO}" ; done < br.zone
 
 # Portas de bloqueio
-PORTS="8080,3389"
+PORTS="3389,30389,3000"
 
 # Gravar Logs no arquivo, antes verifica se a regra existe CHAIN CUSTOMINPUT
 iptables -C CUSTOMINPUT   -p tcp -m multiport --dports $PORTS -m set ! --match-set $LISTA src -j NFLOG --nflog-prefix "${LISTA^^}:DROP_INPUT: " || \
